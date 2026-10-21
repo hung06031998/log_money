@@ -1,6 +1,6 @@
 {
-    "name": "log_noti_codex",
-    "short_name": "log_noti_codex",
+    "name": "log_noti",
+    "short_name": "log_noti",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

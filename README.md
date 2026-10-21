@@ -1,50 +1,41 @@
-# Nhật ký thông báo Android
+# Log thông báo
 
-Ứng dụng Flutter + Kotlin, Android 7.0 (API 24) trở lên. Nhận thông báo bằng `NotificationListenerService`, ghi SQLite trong native Android, xem lịch sử bằng Flutter. Không cần mở giao diện để lưu. Không gửi dữ liệu lên máy chủ; tắt Android backup cho dữ liệu ứng dụng.
+Ứng dụng Flutter lưu thông báo Android vào SQLite. Logic ứng dụng nằm trong `lib/notifications/`:
 
-## Cài và sử dụng
+| File Dart | Trách nhiệm |
+| --- | --- |
+| `balance_classifier.dart` | Nhận diện biến động số dư, chuẩn hóa tiếng Việt, điều kiện bao gồm/loại trừ |
+| `notification_payload.dart` | Chọn tiêu đề, nội dung dự phòng, ghép tin nhắn và tên người gửi |
+| `notification_store.dart` | Schema, migration SQLite, tìm kiếm, phân trang, chống trùng, lưu phân tích |
+| `notification_worker.dart` | Xử lý nền, cấu hình, phân loại lại, hàng đợi phân tích và chống gọi API lặp |
+| `gemini_analyzer.dart` | HTTP Gemini, prompt, schema JSON, kiểm tra phản hồi và thông báo lỗi |
 
-```sh
-flutter pub get
-flutter run
-# Hoặc tạo APK cài thử:
-flutter build apk --debug
-```
+`lib/notification_log_api.dart` là API cho giao diện. Các yêu cầu nghiệp vụ đi qua cầu nối tới cùng một Dart worker, nên mở/đóng Activity không tạo thêm hàng đợi phân tích. Entry point `notificationWorkerMain` trong `lib/main.dart` được giữ lại khi build release bằng `@pragma('vm:entry-point')`.
 
-APK: `build/app/outputs/flutter-apk/app-debug.apk`. Đây là bản cài thử ký debug, chưa phải bản phát hành lên cửa hàng.
+## Phần Android còn lại
 
-1. Mở ứng dụng, chọn **Quyền thông báo**, bật quyền truy cập cho **Nhật ký thông báo**. Android yêu cầu người dùng tự cấp quyền đọc dữ liệu này. Một số thiết bị chặn quyền của APK cài ngoài; kiểm tra phần “Cho phép cài đặt bị hạn chế” trong thông tin ứng dụng nếu có.
-2. Kiểm tra dòng **Đang kết nối với Android**. Vào **Thiết lập** để mở cài đặt pin, đặt ứng dụng ở chế độ không hạn chế; bật tự khởi động nếu hãng máy có tùy chọn này.
-3. Nhận thông báo mới, mở lịch sử; nhấn bản ghi để xem đầy đủ văn bản và JSON metadata. Có bản ghi mới thì nhấn nút xem mới hoặc làm mới. Lịch sử cũ giữ vị trí khi có sự kiện mới.
-4. Dùng **Tải thêm thông báo** để đọc tiếp toàn bộ lịch sử, mỗi trang 50 bản ghi. Tìm kiếm trong ứng dụng, package, tiêu đề và nội dung; SQLite hỗ trợ tìm Unicode chính xác nhưng không có case folding đầy đủ cho mọi ký tự tiếng Việt.
+Kotlin chỉ làm cầu nối nền tảng: `NotificationListenerService`, quyền và cài đặt hệ thống, đọc `Notification`/`Bundle`, hiển thị thông báo, Android Keystore, khởi động Flutter engine nền và thực thi SQLite theo câu lệnh Dart gửi xuống. Không còn bộ lọc hay HTTP Gemini trong Kotlin.
 
-## Phạm vi bảo đảm và giới hạn
+`NotificationDb.kt` có một bảng hàng đợi `native_inbox` để lưu ngay payload khi Dart chưa sẵn sàng hoặc thiết bị chưa mở khóa. Dart chuyển payload vào lịch sử và xóa khỏi hàng đợi trong cùng transaction. Database `notification_log.db`, phiên bản 3, vị trí device-protected storage, SharedPreferences và alias Keystore cũ đều được giữ nguyên. Migration từ phiên bản 1/2 chạy trong Dart.
 
-Không có ứng dụng Android thông thường nào bảo đảm “không bỏ sót 100% trong mọi điều kiện”. Android/OEM có thể dừng tiến trình, người dùng thu hồi quyền, buộc dừng ứng dụng, hồ sơ công việc có chính sách hạn chế, thiết bị đầy bộ nhớ hoặc bị mất nguồn. Khi bị buộc dừng, cần mở lại ứng dụng. Sau reboot cần mở khóa để truy cập database.
+Dart worker dùng một Flutter engine riêng, sống cùng tiến trình dịch vụ và tốn thêm bộ nhớ. Khi Android dừng tiến trình, dữ liệu đã lưu trong hàng đợi được xử lý lại ở lần dịch vụ/giao diện khởi động tiếp theo. Force-stop ứng dụng vẫn chịu giới hạn của Android.
 
-- Mỗi `onNotificationPosted` được ghi thành một hàng riêng, gồm cả lần cập nhật cùng khóa, thông báo nhóm và thông báo ongoing. Không lọc theo ứng dụng và không tự xóa lịch sử.
-- SQLite commit đồng bộ với `synchronous=FULL` trước khi callback hoàn tất; không đi qua Flutter, không dùng hàng đợi chỉ nằm trong RAM. Đánh đổi: tốc độ ghi phụ thuộc bộ nhớ thiết bị, cần thử tải lớn trên thiết bị đích. Vẫn có khoảng rủi ro nếu tiến trình bị giết trước khi commit hoặc storage lỗi; chưa có hàng đợi retry bền vững ngoài SQLite.
-- Khi kết nối lại, lấy các thông báo còn hoạt động; chỉ bỏ bản khôi phục có cùng key/postTime/payload đã lưu. Không khôi phục được những thông báo đã biến mất trong thời gian mất kết nối, hoặc các phiên bản trung gian bị cập nhật khi mất kết nối.
-- Yêu cầu rebind sau ngắt kết nối, reboot và cập nhật ứng dụng. Đây là yêu cầu tới hệ thống, không bảo đảm thời điểm Android sẽ kết nối lại. Không dùng foreground service để đưa ra bảo đảm giả rằng listener luôn được kết nối.
-- Lưu tiêu đề, nội dung thường/mở rộng, text lines, tin nhắn hội thoại, thời gian, nguồn, package, key, channel, group, action labels và extras dạng JSON. Trường parcelable phi văn bản có dấu `[Non-text ...]`; trường không đọc được có dấu `[Unreadable ...]`. Không sao chép ảnh, tệp đính kèm, PendingIntent hay RemoteViews tùy biến.
-- Android 15+ có thể che nội dung OTP. Chỉ lưu được những gì hệ thống chuyển cho listener; không vượt qua giới hạn này.
-- Màn hình không giới hạn số trang hay rút gọn văn bản bản ghi. Phân trang theo ID, không dùng offset nên dữ liệu đến mới không làm nhảy/mất hàng cũ. Các trang đã xem được giữ trong RAM; lịch sử cực lớn có thể cần tối ưu cửa sổ giao diện trong phiên bản sau.
-- Lỗi ghi/khôi phục gần nhất được lưu riêng trong preferences và hiển thị; không tự xóa dấu lỗi khi có sự kiện tiếp theo thành công. Hết dung lượng nghiêm trọng cũng có thể làm mất cả khả năng ghi dấu lỗi.
-- Dữ liệu nằm trong sandbox ứng dụng, không có mã hóa riêng hoặc khóa sinh trắc học. Gỡ ứng dụng/xóa dữ liệu sẽ mất lịch sử.
+## Bộ lọc và Gemini
 
-Tài liệu nền tảng: [NotificationListenerService](https://developer.android.com/reference/android/service/notification/NotificationListenerService), [Android 15 và nội dung nhạy cảm](https://developer.android.com/about/versions/15/behavior-changes-all).
+Mở menu ☰ → **Chỉnh sửa bộ lọc thông báo**. Mỗi dòng là một cụm từ; không phân biệt hoa/thường hoặc dấu tiếng Việt. Điều kiện bao gồm yêu cầu ít nhất một dòng khớp; bất kỳ dòng loại trừ nào khớp đều loại thông báo. Để trống để dùng nhận diện tự động. Bộ lọc chạy trên máy, không cần API key.
 
-## Kiểm thử
+Gemini chỉ được gọi khi mở chi tiết biến động số dư chưa phân tích hoặc bấm **Phân tích**. API key được mã hóa bằng Android Keystore. Nội dung thông báo được gửi tới Gemini khi phân tích và có thể phát sinh phí. Model có thể thay đổi trong cấu hình.
+
+Kết quả hoặc lỗi được lưu, không tự gọi lại sau khi mở lại hoặc khởi động lại tiến trình. Bấm **Phân tích** để chủ động gọi lại. Đổi cụm từ sẽ phân loại lại trên máy, giữ nguyên phân tích cũ. HTTP chạy riêng để không chặn ghi nhận thông báo và xem lịch sử.
+
+## Kiểm tra
 
 ```sh
 flutter analyze
 flutter test
-cd android
-./gradlew :app:connectedDebugAndroidTest
+flutter build apk --debug
 ```
 
-Kiểm thử Flutter: trạng thái kết nối, phân trang trong khi nhận thêm dữ liệu, tìm kiếm không có kết quả, hiển thị lỗi database.
+Test host cần Python 3 để kiểm thử repository bằng SQLite thật (thư viện chuẩn `sqlite3`), không cần package Python bên ngoài. Python không nằm trong ứng dụng.
 
-Kiểm thử instrumentation (cần thiết bị/máy ảo): callback trùng vẫn giữ, snapshot phục hồi không ghi trùng, phân trang đồng thời có ghi mới, lưu Unicode dài qua đóng/mở database. Dùng database `test-notifications.db` tách khỏi lịch sử thực.
-
-Trước khi dùng lâu dài trên điện thoại thực, cần đối chiếu số bản ghi với nguồn phát: gửi một đợt thông báo đánh số, cập nhật lại cùng ID, thử màn hình tắt/Doze, vuốt đóng giao diện, khởi động lại, thu hồi/cấp lại quyền. Kiểm tra cả thông báo nhóm, MessagingStyle và nội dung dài. Kiểm thử database không chứng minh Android chuyển đủ mọi callback.
+Kiểm tra trên thiết bị: nhận thông báo khi mở và đóng giao diện; khởi động lại máy rồi mở khóa; nâng cấp từ bản cũ để kiểm tra lịch sử và key; đổi bộ lọc; phân tích lại với API key thật; thử mất mạng. Các test host không thay thế kiểm thử vòng đời Android và API thật.

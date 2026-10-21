@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Log thông báo</string>
+    <string name="listener_channel_name">Lắng nghe thông báo</string>
+    <string name="listener_channel_desc">Giữ dịch vụ ghi nhật ký thông báo luôn chạy</string>
+    <string name="listener_notification_title">Đang lắng nghe thông báo</string>
+    <string name="listener_notification_text">Mọi thông báo trên máy sẽ được lưu vào nhật ký</string>
+    <string name="manual_channel_name">Thông báo tạo tay</string>
+    <string name="manual_channel_desc">Thông báo được tạo từ nút trên thanh công cụ</string>
+</resources>
